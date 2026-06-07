@@ -110,7 +110,19 @@ def get_result(img1, img2, model, device, batch_size=1, niter=300, schedule='cos
         conf_i = confidence_masks[i].detach().cpu().numpy() 
         pts2d_list.append(xy_grid(*imgs[i].shape[:2][::-1])[conf_i])  # imgs[i].shape[:2] = (H, W)
         pts3d_list.append(pts3d1[i][conf_i])
-    reciprocal_in_P2, nn2_in_P1, num_matches = find_reciprocal_matches(*pts3d_list)
+
+    empty_matches_2d = np.empty((0, 2), dtype=np.int64)
+    empty_matches_3d = np.empty((0, 3), dtype=np.float32)
+    if len(pts3d_list[0]) == 0 or len(pts3d_list[1]) == 0:
+        return trans_pose, pts3d, imgs, empty_matches_2d, empty_matches_2d, empty_matches_3d
+
+    try:
+        reciprocal_in_P2, nn2_in_P1, num_matches = find_reciprocal_matches(*pts3d_list)
+    except IndexError:
+        return trans_pose, pts3d, imgs, empty_matches_2d, empty_matches_2d, empty_matches_3d
+
+    if num_matches == 0 or not np.any(reciprocal_in_P2):
+        return trans_pose, pts3d, imgs, empty_matches_2d, empty_matches_2d, empty_matches_3d
     
     index0 = nn2_in_P1[reciprocal_in_P2]
     index1 = np.where(reciprocal_in_P2==True)[0]
@@ -123,6 +135,20 @@ def get_result(img1, img2, model, device, batch_size=1, niter=300, schedule='cos
 
 # Obtain the scale factor based on point matching correspondence and point cloud coordinates    
 def get_scale(matches_im1_0, matches_im1_1, matches_im2_0, matches_im2_1, matches_3d1_0, matches_3d2_1):
+    matches_im1_1 = np.asarray(matches_im1_1)
+    matches_im2_0 = np.asarray(matches_im2_0)
+    matches_3d1_0 = np.asarray(matches_3d1_0)
+    matches_3d2_1 = np.asarray(matches_3d2_1)
+    if (
+        matches_im1_1.ndim != 2
+        or matches_im2_0.ndim != 2
+        or len(matches_im1_1) == 0
+        or len(matches_im2_0) == 0
+        or len(matches_3d1_0) == 0
+        or len(matches_3d2_1) == 0
+    ):
+        return 1.0, 1.0
+
     sorted_index = np.lexsort((matches_im1_1[:,0], matches_im1_1[:,1]))
     matches_im1_1s = matches_im1_1[sorted_index]
 
@@ -158,6 +184,9 @@ def get_scale(matches_im1_0, matches_im1_1, matches_im2_0, matches_im2_1, matche
     pcd2 = matches_3d2_1[matching_index_2]
     
     num_matches = len(matching_index_1)
+    if num_matches < 2:
+        return 1.0, 1.0
+
     match_idx_to_viz = range(0,num_matches)
     
     sample_matches_pcd0 = pcd0[match_idx_to_viz]
@@ -174,8 +203,16 @@ def get_scale(matches_im1_0, matches_im1_1, matches_im2_0, matches_im2_1, matche
         scale.append(diff2/(diff1 + eps))
 
     scale_array = np.array(scale)
-    scale_mean = np.mean(scale_array[:,3])
-    scale_median = np.median(scale_array[:,3])
+    if scale_array.ndim != 2 or scale_array.shape[0] == 0 or scale_array.shape[1] < 4:
+        return 1.0, 1.0
+
+    distance_scales = scale_array[:,3]
+    distance_scales = distance_scales[np.isfinite(distance_scales)]
+    if len(distance_scales) == 0:
+        return 1.0, 1.0
+
+    scale_mean = np.mean(distance_scales)
+    scale_median = np.median(distance_scales)
 
     return scale_mean, scale_median
     

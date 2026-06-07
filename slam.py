@@ -30,6 +30,11 @@ from utils.slam_frontend import FrontEnd
 
 from dust3r.model import AsymmetricCroCo3DStereo
 
+try:
+    mp.set_sharing_strategy("file_system")
+except RuntimeError:
+    pass
+
 
 class SLAM:
     def __init__(self, config, d3r_model, save_dir=None):
@@ -219,7 +224,15 @@ class SLAM:
             )
 
         backend_queue.put(["stop"])
-        backend_process.join()       
+        backend_process.join(timeout=30)
+        if backend_process.is_alive():
+            Log("Backend did not stop within 30s; terminating it")
+            backend_process.terminate()
+            backend_process.join(timeout=10)
+        if backend_process.is_alive():
+            Log("Backend did not terminate cleanly; killing it")
+            backend_process.kill()
+            backend_process.join()
         Log("Backend stopped and joined the main thread")
         if self.use_gui:               
             q_main2vis.put(gui_utils.GaussianPacket(finish=True))
