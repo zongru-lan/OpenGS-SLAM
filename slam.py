@@ -24,6 +24,7 @@ from utils.dataset import load_dataset
 from utils.eval_utils import eval_ate, eval_rendering, save_gaussians
 from utils.logging_utils import Log
 from utils.multiprocessing_utils import FakeQueue
+from utils.railway_export import export_railway_results
 from utils.slam_backend import BackEnd
 from utils.slam_frontend import FrontEnd
 
@@ -200,6 +201,23 @@ class SLAM:
             wandb.log({"Metrics": metrics_table})
             save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
 
+        if (
+            self.config["Dataset"].get("type") == "railway"
+            and self.config["Results"].get("clean_export", False)
+        ):
+            if not self.eval_rendering:
+                self.gaussians = self.frontend.gaussians
+            export_railway_results(
+                self.frontend.cameras,
+                self.frontend.kf_indices,
+                self.gaussians,
+                self.dataset,
+                self.save_dir,
+                self.pipeline_params,
+                self.background,
+                self.config,
+            )
+
         backend_queue.put(["stop"])
         backend_process.join()       
         Log("Backend stopped and joined the main thread")
@@ -247,12 +265,25 @@ if __name__ == "__main__":
     if config["Results"]["save_results"]:
         mkdir_p(config["Results"]["save_dir"])
         current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")  
-        path = config["Dataset"]["dataset_path"].split("/")
-        save_dir = os.path.join(
-            config["Results"]["save_dir"], path[-3] + "_" + path[-2], current_datetime
-        )
         tmp = args.config
         tmp = tmp.split(".")[0]
+        if config["Dataset"].get("type") == "railway":
+            scene = config["Dataset"].get("scene") or os.path.basename(
+                os.path.normpath(config["Dataset"]["dataset_path"])
+            )
+            sequence_save_dir = os.path.join(config["Results"]["save_dir"], scene)
+            internal_runs_dir = os.path.join(sequence_save_dir, "internal_runs")
+            mkdir_p(sequence_save_dir)
+            mkdir_p(internal_runs_dir)
+            save_dir = os.path.join(internal_runs_dir, current_datetime)
+            config["Results"]["sequence_save_dir"] = sequence_save_dir
+        else:
+            dataset_path_parts = config["Dataset"]["dataset_path"].split("/")
+            save_dir = os.path.join(
+                config["Results"]["save_dir"],
+                dataset_path_parts[-3] + "_" + dataset_path_parts[-2],
+                current_datetime,
+            )
         config["Results"]["save_dir"] = save_dir
         mkdir_p(save_dir)
         with open(os.path.join(save_dir, "config.yml"), "w") as file:     
@@ -267,7 +298,17 @@ if __name__ == "__main__":
         wandb.define_metric("frame_idx")
         wandb.define_metric("ate*", step_metric="frame_idx")
         
-    model_name = "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+    model_name = (
+        config.get("Model", {}).get("checkpoint")
+        or config.get("model_params", {}).get("model_path")
+        or "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+    )
+    if not os.path.isfile(model_name):
+        raise FileNotFoundError(
+            f"Missing DUSt3R checkpoint: {model_name}. "
+            "Place DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth under checkpoints/ "
+            "or set Model.checkpoint in the config."
+        )
     d3r_model = AsymmetricCroCo3DStereo.from_pretrained(model_name).to("cuda")
 
     slam = SLAM(config, save_dir=save_dir,d3r_model=d3r_model)

@@ -42,7 +42,7 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ape_metric.process_data(data)
     ape_stat = ape_metric.get_statistic(metrics.StatisticsType.rmse)
     ape_stats = ape_metric.get_all_statistics()
-    Log("RMSE ATE \[m]", ape_stat, tag="Eval")
+    Log("RMSE ATE [m]", ape_stat, tag="Eval")
 
     with open(
         os.path.join(plot_dir, "stats_{}.json".format(str(label))),
@@ -51,23 +51,26 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ) as f:
         json.dump(ape_stats, f, indent=4)
 
-    plot_mode = evo.tools.plot.PlotMode.xy
-    fig = plt.figure()
-    ax = evo.tools.plot.prepare_axis(fig, plot_mode)
-    ax.set_title(f"ATE RMSE: {ape_stat}")
-    evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
-    evo.tools.plot.traj_colormap(
-        ax,
-        traj_est_aligned,
-        ape_metric.error,
-        plot_mode,
-        min_map=ape_stats["min"],
-        max_map=ape_stats["max"],
-    )
-    ax.legend()
-    # plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
-    plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))))
-    plt.close(fig)  
+    try:
+        plot_mode = evo.tools.plot.PlotMode.xy
+        fig = plt.figure()
+        ax = evo.tools.plot.prepare_axis(fig, plot_mode)
+        ax.set_title(f"ATE RMSE: {ape_stat}")
+        evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
+        evo.tools.plot.traj_colormap(
+            ax,
+            traj_est_aligned,
+            ape_metric.error,
+            plot_mode,
+            min_map=ape_stats["min"],
+            max_map=ape_stats["max"],
+        )
+        ax.legend()
+        plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))))
+    except Exception as exc:
+        Log(f"Skipping evo trajectory plot for {label}: {exc}", tag="Eval")
+    finally:
+        plt.close("all")
 
     return ape_stat
 
@@ -141,7 +144,7 @@ def eval_rendering(
 ):
     interval = 1
     img_pred, img_gt, saved_frame_idx, img_residual = [], [], [], []
-    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
+    end_idx = len(frames) if isinstance(iteration, str) else int(iteration)
     psnr_array, ssim_array, lpips_array = [], [], []
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
@@ -220,13 +223,16 @@ def eval_rendering(
         
     end_time1 = time.time()
     render_time = end_time1 - start_time1
-    avg_render_time = render_time / N
-    print("average render time is:", avg_render_time)
-        
-    output = dict()
-    output["mean_psnr"] = float(np.mean(psnr_array))
-    output["mean_ssim"] = float(np.mean(ssim_array))
-    output["mean_lpips"] = float(np.mean(lpips_array))
+    if N == 0:
+        Log("No non-keyframe images available for native rendering evaluation", tag="Eval")
+        output = {"mean_psnr": float("nan"), "mean_ssim": float("nan"), "mean_lpips": float("nan")}
+    else:
+        avg_render_time = render_time / N
+        print("average render time is:", avg_render_time)
+        output = dict()
+        output["mean_psnr"] = float(np.mean(psnr_array))
+        output["mean_ssim"] = float(np.mean(ssim_array))
+        output["mean_lpips"] = float(np.mean(lpips_array))
 
     Log(
         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',

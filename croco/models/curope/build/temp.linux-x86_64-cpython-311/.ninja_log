@@ -1,5 +1,0 @@
-# ninja log v5
-0	22239	1724736066938953823	/home/chengchong/ysc/MonoGS/croco/models/curope/build/temp.linux-x86_64-cpython-311/curope.o	11691ab4321a287
-1	251428	1724736296082317959	/home/chengchong/ysc/MonoGS/croco/models/curope/build/temp.linux-x86_64-cpython-311/kernels.o	1a09d40b675623df
-13	18539	1724770806907921449	/home/chengchong/ysc/MonoGS/croco/models/curope/build/temp.linux-x86_64-cpython-311/curope.o	bbbac0a5019f69ea
-13	213685	1724771002022446114	/home/chengchong/ysc/MonoGS/croco/models/curope/build/temp.linux-x86_64-cpython-311/kernels.o	bb917ac04f43f067

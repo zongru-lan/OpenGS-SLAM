@@ -9,3 +9,31 @@ preprocess/
 *.tmp
 *.swp
 *.DS_Store
+
+# Runtime artifacts
+/logs/
+/results/
+/wandb/
+/output/*
+!/output/SAVE_CONVENTIONS.md
+
+# Local model weights and large checkpoints
+/checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# Build products
+build/
+dist/
+*.egg-info/
+*.so
+*.o
+*.ninja_log
+*.ninja_deps
+
+# Third-party source trees kept local for runtime
+/croco/
+/dust3r/
+/gaussian_splatting/
+/submodules/
