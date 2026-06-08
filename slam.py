@@ -5,6 +5,7 @@ import glob
 #matplotlib.use('Agg')  
 import sys
 import time
+import traceback
 import numpy as np
 from argparse import ArgumentParser
 from datetime import datetime
@@ -120,9 +121,25 @@ class SLAM:
             gui_process.start()
             time.sleep(5)
 
-        backend_process.start()        
+        backend_process.start()
+
+        def stop_backend():
+            if backend_process.is_alive():
+                backend_queue.put(["stop"])
+            backend_process.join(timeout=30)
+            if backend_process.is_alive():
+                Log("Backend did not stop within 30s; terminating it")
+                backend_process.terminate()
+                backend_process.join(timeout=10)
+            if backend_process.is_alive():
+                Log("Backend did not terminate cleanly; killing it")
+                backend_process.kill()
+                backend_process.join()
+            Log("Backend stopped and joined the main thread")
+
         self.frontend.run()
-        backend_queue.put(["pause"])    
+        if backend_process.is_alive():
+            backend_queue.put(["pause"])
 
         end.record()
         torch.cuda.synchronize()
@@ -171,38 +188,71 @@ class SLAM:
             #print("average render time is:", ave_time)
             
             if self.color_refinement:
-                # re-used the frontend queue to retrive the gaussians from the backend.
-                while not frontend_queue.empty():     
-                    frontend_queue.get()
-                backend_queue.put(["color_refinement"])
-                while True:
-                    if frontend_queue.empty():
-                        time.sleep(0.01)
-                        continue
-                    data = frontend_queue.get()             
-                    if data[0] == "sync_backend" and frontend_queue.empty():
-                        gaussians = data[1]
-                        self.gaussians = gaussians
-                        break
+                color_refined = False
+                color_refinement_error = None
+                strict_color_refinement = bool(
+                    self.config["Results"].get(
+                        "strict_color_refinement",
+                        self.config["Dataset"].get("type") == "railway",
+                    )
+                )
+                if not backend_process.is_alive():
+                    color_refinement_error = "backend is not alive"
+                    Log("Backend is not alive; color refinement cannot run")
+                else:
+                    # Re-use the frontend queue to retrieve the refined gaussians from the backend.
+                    while not frontend_queue.empty():
+                        frontend_queue.get()
+                    backend_queue.put(["color_refinement"])
+                    wait_start = time.time()
+                    wait_timeout = float(
+                        self.config["Results"].get("color_refinement_timeout_sec", 1800)
+                    )
+                    while True:
+                        if not backend_process.is_alive():
+                            color_refinement_error = "backend stopped during color refinement"
+                            Log("Backend stopped during color refinement")
+                            break
+                        if time.time() - wait_start > wait_timeout:
+                            color_refinement_error = "color refinement timed out"
+                            Log("Color refinement timed out")
+                            break
+                        if frontend_queue.empty():
+                            time.sleep(0.01)
+                            continue
+                        data = frontend_queue.get()
+                        if data[0] == "sync_backend" and frontend_queue.empty():
+                            gaussians = data[1]
+                            self.gaussians = gaussians
+                            color_refined = True
+                            break
 
-                rendering_result = eval_rendering(
-                    self.frontend.cameras,
-                    self.gaussians,
-                    self.dataset,
-                    self.save_dir,
-                    self.pipeline_params,
-                    self.background,
-                    kf_indices=kf_indices,
-                    iteration="after_opt",
-                )
-                metrics_table.add_data(
-                    "After_opt",
-                    rendering_result["mean_psnr"],
-                    rendering_result["mean_ssim"],
-                    rendering_result["mean_lpips"],
-                    ATE,
-                    FPS,
-                )
+                if strict_color_refinement and not color_refined:
+                    stop_backend()
+                    reason = color_refinement_error or "no refined gaussians returned"
+                    raise RuntimeError(
+                        f"Color refinement is required for railway clean export, but failed: {reason}"
+                    )
+
+                if color_refined:
+                    rendering_result = eval_rendering(
+                        self.frontend.cameras,
+                        self.gaussians,
+                        self.dataset,
+                        self.save_dir,
+                        self.pipeline_params,
+                        self.background,
+                        kf_indices=kf_indices,
+                        iteration="after_opt",
+                    )
+                    metrics_table.add_data(
+                        "After_opt",
+                        rendering_result["mean_psnr"],
+                        rendering_result["mean_ssim"],
+                        rendering_result["mean_lpips"],
+                        ATE,
+                        FPS,
+                    )
             wandb.log({"Metrics": metrics_table})
             save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
 
@@ -223,17 +273,7 @@ class SLAM:
                 self.config,
             )
 
-        backend_queue.put(["stop"])
-        backend_process.join(timeout=30)
-        if backend_process.is_alive():
-            Log("Backend did not stop within 30s; terminating it")
-            backend_process.terminate()
-            backend_process.join(timeout=10)
-        if backend_process.is_alive():
-            Log("Backend did not terminate cleanly; killing it")
-            backend_process.kill()
-            backend_process.join()
-        Log("Backend stopped and joined the main thread")
+        stop_backend()
         if self.use_gui:               
             q_main2vis.put(gui_utils.GaussianPacket(finish=True))
             gui_process.join()
@@ -316,19 +356,30 @@ if __name__ == "__main__":
         or config.get("model_params", {}).get("model_path")
         or "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
     )
-    if not os.path.isfile(model_name):
-        raise FileNotFoundError(
-            f"Missing DUSt3R checkpoint: {model_name}. "
-            "Place DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth under checkpoints/ "
-            "or set Model.checkpoint in the config."
-        )
-    d3r_model = AsymmetricCroCo3DStereo.from_pretrained(model_name).to("cuda")
+    try:
+        if not os.path.isfile(model_name):
+            raise FileNotFoundError(
+                f"Missing DUSt3R checkpoint: {model_name}. "
+                "Place DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth under checkpoints/ "
+                "or set Model.checkpoint in the config."
+            )
+        d3r_model = AsymmetricCroCo3DStereo.from_pretrained(model_name).to("cuda")
+        slam = SLAM(config, save_dir=save_dir,d3r_model=d3r_model)
 
-    slam = SLAM(config, save_dir=save_dir,d3r_model=d3r_model)
-    
-    slam.run()
-    device = "cuda"
-    wandb.finish()
+        slam.run()
+        device = "cuda"
+        wandb.finish()
 
-    # All done
-    Log("Done.")
+        # All done
+        Log("Done.")
+        if config["Dataset"].get("type") == "railway":
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+    except Exception:
+        traceback.print_exc()
+        if config["Dataset"].get("type") == "railway":
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(1)
+        raise

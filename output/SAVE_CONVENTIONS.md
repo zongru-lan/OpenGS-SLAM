@@ -16,6 +16,7 @@ For OpenGS-SLAM this means:
 - OpenGS-SLAM internal outputs are kept under `output/<sequence_name>/internal_runs/<timestamp>/`.
 - The railway clean export layer runs after the final Gaussian map is available.
 - User-facing results are rewritten under `output/<sequence_name>/renders`, `poses`, and `metrics`.
+- Railway runs are quality-first: when `color_refinement` is enabled, clean export requires the color-refined final map. If color refinement fails, times out, or the backend dies, the sequence is treated as failed instead of exporting a degraded fallback; the batch runner records `FAIL` for that sequence and continues with the remaining queue.
 
 ## Output Root
 
@@ -37,7 +38,7 @@ Example:
 /home/leizongru/lzr_ws/OpenGS-SLAM/output/scene_14_train/
 ```
 
-The clean export rewrites `renders/`, `poses/`, and `metrics/` on every run for that sequence. Older clean results are replaced by the latest run. Internal OpenGS-SLAM run folders are preserved under `internal_runs/`.
+The batch runner removes `renders/`, `poses/`, `metrics/`, and `config.yaml` at the start of each sequence run. A successful clean export then rewrites those user-facing files. If a sequence fails, no stale user-facing result should remain for that sequence. Internal OpenGS-SLAM run folders are preserved under `internal_runs/`.
 
 ## Expected Layout
 

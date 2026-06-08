@@ -7,6 +7,8 @@ Results:
   eval_rendering: true
   use_wandb: false
   color_refinement: true
+  strict_color_refinement: true
+  color_refinement_timeout_sec: 1800
   clean_export: true
 
 Dataset:

@@ -11,8 +11,10 @@ LOG_DIR="${LOG_DIR:-$REPO_DIR/logs}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 GPU_MAX_USED_MB="${GPU_MAX_USED_MB:-1000}"
 OPEN_FILE_LIMIT="${OPEN_FILE_LIMIT:-65535}"
+CLEAN_USER_OUTPUT="${CLEAN_USER_OUTPUT:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-max_split_size_mb:128}"
 
 if ! ulimit -n "$OPEN_FILE_LIMIT" 2>/dev/null; then
   echo "WARN: unable to set open file limit to $OPEN_FILE_LIMIT; current limit is $(ulimit -n)" >&2
@@ -99,6 +101,13 @@ append_summary() {
   release_lock "$SUMMARY_LOCK"
 }
 
+clean_user_output() {
+  local scene="$1"
+  local scene_output="$REPO_DIR/output/$scene"
+  [[ "$CLEAN_USER_OUTPUT" == "1" ]] || return 0
+  rm -rf "$scene_output/renders" "$scene_output/poses" "$scene_output/metrics" "$scene_output/config.yaml"
+}
+
 make_scene_config() {
   local scene="$1"
   local config_path="$2"
@@ -167,6 +176,7 @@ run_scene() {
     echo "python: $PYTHON_BIN"
     echo "data_root: $DATA_ROOT"
     echo "open_file_limit: $(ulimit -n)"
+    echo "pytorch_cuda_alloc_conf: ${PYTORCH_CUDA_ALLOC_CONF:-}"
     echo
     echo "command:"
     echo "CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN slam.py --config $scene_config $EXTRA_ARGS"
@@ -176,6 +186,11 @@ run_scene() {
   set +e
   make_scene_config "$scene" "$scene_config" >> "$log_file" 2>&1
   exit_code=$?
+
+  if [[ "$exit_code" -eq 0 && "$DRY_RUN" != "1" ]]; then
+    clean_user_output "$scene" >> "$log_file" 2>&1
+    exit_code=$?
+  fi
 
   if [[ "$exit_code" -eq 0 ]]; then
     if [[ "$DRY_RUN" == "1" ]]; then
